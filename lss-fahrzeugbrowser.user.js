@@ -9,6 +9,10 @@
 // @grant        GM_xmlhttpRequest
 // @connect      api.lss-manager.de
 // ==/UserScript==
+// @updateURL    https://github.com/itsMartinus99/lss-userscripts/raw/main/lss-fahrzeugbrowser.user.js
+// @downloadURL  https://github.com/itsMartinus99/lss-userscripts/raw/main/lss-fahrzeugbrowser.user.js
+
+
 
 (() => {
   'use strict';
@@ -261,27 +265,27 @@
     }
   }
 
-  function debugUnknownTypes() {
-    const unknown = unknownVehicleTypeIds();
-    if (!unknown.length) {
-      console.info('[Fahrzeugbrowser] Keine unbekannten Fahrzeugtypen gefunden.');
-      alert('Keine unbekannten Fahrzeugtypen gefunden.');
-      return;
-    }
+function debugUnknownTypes() {
+  const unknown = unknownVehicleTypeIds();
 
-    console.table(unknown.map(id => ({
-      id,
-      exampleVehicles: STATE.vehicles
-        .filter(vehicle => apiType(vehicle) === id)
-        .slice(0, 5)
-        .map(vehicleCaption)
-        .join(', ')
-    })));
-
-    alert('Unbekannte Fahrzeugtyp-IDs: ' + unknown.join(', ') + '
-
-Die Beispiele stehen in der Browser-Konsole.');
+  if (!unknown.length) {
+    console.info('[Fahrzeugbrowser] Keine unbekannten Fahrzeugtypen gefunden.');
+    alert('Keine unbekannten Fahrzeugtypen gefunden.');
+    return;
   }
+
+  console.table(unknown.map(id => ({
+    id,
+    exampleVehicles: STATE.vehicles
+      .filter(vehicle => apiType(vehicle) === id)
+      .slice(0, 5)
+      .map(vehicleCaption)
+      .join(', ')
+  })));
+
+  alert('Unbekannte Fahrzeugtyp-IDs: ' + unknown.join(', ') + '\n\nDie Beispiele stehen in der Browser-Konsole.');
+}
+
 
   function loadCachedVehicleTypes() {
     try {
@@ -772,13 +776,12 @@ Die Beispiele stehen in der Browser-Konsole.');
     return parent?.querySelector('ul.dropdown-menu, .dropdown-menu') || null;
   }
 
-  function normalizeMenuText(value) {
-    return String(value || '')
-      .replace(/[ 	
-]+/g, ' ')
-      .trim()
-      .toLowerCase();
-  }
+function normalizeMenuText(value) {
+  return String(value || '')
+    .replace(/[ \t\r\n]+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
 
   function findMenuLinkByText(text) {
     const wanted = normalizeMenuText(text);
