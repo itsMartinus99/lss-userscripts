@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LSS Fahrzeugbrowser stabil
 // @namespace    itsMartinus99-lss-tools
-// @version      2.1.1
+// @version      2.1.2
 // @description  Fahrzeugbrowser für Leitstellenspiel: /api/vehicles als Hauptquelle, LSS-Manager für Typnamen, API v2 nur als Notfall-Fallback; mit Cache-Reset für neue Fahrzeugtypen.
 // @author       Martin / ChatGPT
 // @match        https://www.leitstellenspiel.de/*
@@ -772,11 +772,19 @@ Die Beispiele stehen in der Browser-Konsole.');
     return parent?.querySelector('ul.dropdown-menu, .dropdown-menu') || null;
   }
 
-  function findMenuItemByText(text) {
-    const wanted = String(text).trim().toLowerCase();
+  function normalizeMenuText(value) {
+    return String(value || '')
+      .replace(/[ 	
+]+/g, ' ')
+      .trim()
+      .toLowerCase();
+  }
+
+  function findMenuLinkByText(text) {
+    const wanted = normalizeMenuText(text);
 
     for (const link of document.querySelectorAll('a')) {
-      const label = String(link.textContent || '').trim().toLowerCase();
+      const label = normalizeMenuText(link.textContent);
       if (label.includes(wanted)) return link;
     }
 
@@ -790,12 +798,14 @@ Die Beispiele stehen in der Browser-Konsole.');
     refresh();
   }
 
-  function insertMenuItem() {
-    if (document.getElementById('lss-fb-menu-item')) return;
+  function createMenuItem() {
+    let item = document.getElementById('lss-fb-menu-item');
 
-    const item = document.createElement('li');
+    if (item) return item;
+
+    item = document.createElement('li');
     item.id = 'lss-fb-menu-item';
-    item.innerHTML = '<a href="#">🚒 Fahrzeugbrowser</a>';
+    item.innerHTML = '<a href="#"><span class="glyphicon glyphicon-search"></span> Fahrzeugbrowser</a>';
 
     item.addEventListener('click', event => {
       event.preventDefault();
@@ -803,22 +813,30 @@ Die Beispiele stehen in der Browser-Konsole.');
       openFahrzeugbrowser();
     });
 
-    const aaoLink = findMenuItemByText('Alarm und Ausrückeordnung');
+    return item;
+  }
+
+  function insertMenuItem() {
+    const item = createMenuItem();
+
+    const aaoLink = findMenuLinkByText('Alarm und Ausrückeordnung');
     const aaoItem = aaoLink && aaoLink.closest('li');
 
     if (aaoItem && aaoItem.parentElement) {
-      aaoItem.insertAdjacentElement('beforebegin', item);
+      if (item.nextElementSibling !== aaoItem) {
+        aaoItem.insertAdjacentElement('beforebegin', item);
+      }
       return;
     }
 
     const menu = findProfileDropdownMenu();
-    if (menu) {
-      const divider = menu.querySelector('li.divider, .divider, .dropdown-divider');
-      if (divider) {
-        divider.insertAdjacentElement('beforebegin', item);
-      } else {
-        menu.appendChild(item);
-      }
+    if (!menu) return;
+
+    const divider = menu.querySelector('li.divider, .divider, .dropdown-divider');
+    if (divider) {
+      divider.insertAdjacentElement('beforebegin', item);
+    } else if (!menu.contains(item)) {
+      menu.appendChild(item);
     }
   }
 
