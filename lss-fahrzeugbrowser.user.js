@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LSS Fahrzeugbrowser stabil
 // @namespace    itsMartinus99-lss-tools
-// @version      2.1.2
+// @version      1.3.2
 // @description  Fahrzeugbrowser für Leitstellenspiel: /api/vehicles als Hauptquelle, LSS-Manager für Typnamen, API v2 nur als Notfall-Fallback; mit Cache-Reset für neue Fahrzeugtypen.
 // @author       Martin / ChatGPT
 // @match        https://www.leitstellenspiel.de/*
