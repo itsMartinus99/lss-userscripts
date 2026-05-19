@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         LSS Fahrzeugbrowser stabil
-// @namespace    dienermartin-lss-tools
+// @namespace    itsMartinus99-lss-tools
 // @version      2.1.0
 // @description  Fahrzeugbrowser für Leitstellenspiel: /api/vehicles als Hauptquelle, LSS-Manager für Typnamen, API v2 nur als Notfall-Fallback; mit Cache-Reset für neue Fahrzeugtypen.
 // @author       Martin / ChatGPT
@@ -772,10 +772,26 @@ Die Beispiele stehen in der Browser-Konsole.');
     return parent?.querySelector('ul.dropdown-menu, .dropdown-menu') || null;
   }
 
+  function findMenuItemByText(text) {
+    const wanted = String(text).trim().toLowerCase();
+
+    for (const link of document.querySelectorAll('a')) {
+      const label = String(link.textContent || '').trim().toLowerCase();
+      if (label.includes(wanted)) return link;
+    }
+
+    return null;
+  }
+
+  function openFahrzeugbrowser() {
+    STATE.open = true;
+    STATE.missions = scanVisibleMissions();
+    render();
+    refresh();
+  }
+
   function insertMenuItem() {
     if (document.getElementById('lss-fb-menu-item')) return;
-    const menu = findProfileDropdownMenu();
-    if (!menu) return;
 
     const item = document.createElement('li');
     item.id = 'lss-fb-menu-item';
@@ -784,13 +800,26 @@ Die Beispiele stehen in der Browser-Konsole.');
     item.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
-      STATE.open = true;
-      STATE.missions = scanVisibleMissions();
-      render();
-      refresh();
+      openFahrzeugbrowser();
     });
 
-    menu.appendChild(item);
+    const aaoLink = findMenuItemByText('Alarm und Ausrückeordnung');
+    const aaoItem = aaoLink && aaoLink.closest('li');
+
+    if (aaoItem && aaoItem.parentElement) {
+      aaoItem.insertAdjacentElement('beforebegin', item);
+      return;
+    }
+
+    const menu = findProfileDropdownMenu();
+    if (menu) {
+      const divider = menu.querySelector('li.divider, .divider, .dropdown-divider');
+      if (divider) {
+        divider.insertAdjacentElement('beforebegin', item);
+      } else {
+        menu.appendChild(item);
+      }
+    }
   }
 
   function boot() {
