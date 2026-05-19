@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LSS Fahrzeugbrowser stabil
-// @namespace    itsMartinus99-lss-tools
-// @version      2.0.0
-// @description  Fahrzeugbrowser für Leitstellenspiel: nutzt /api/vehicles als Hauptquelle, LSS-Manager für Typnamen und API v2 nur als Notfall-Fallback.
+// @namespace    dienermartin-lss-tools
+// @version      2.1.0
+// @description  Fahrzeugbrowser für Leitstellenspiel: /api/vehicles als Hauptquelle, LSS-Manager für Typnamen, API v2 nur als Notfall-Fallback; mit Cache-Reset für neue Fahrzeugtypen.
 // @author       Martin / ChatGPT
 // @match        https://www.leitstellenspiel.de/*
 // @match        https://leitstellenspiel.de/*
@@ -15,11 +15,16 @@
 
   const CONFIG = {
     vehicleTypeApi: 'https://api.lss-manager.de/de_DE/vehicles',
-    vehicleTypeCacheKey: 'lss-fahrzeugbrowser.vehicleTypes.de_DE.v2',
-    vehicleTypeCacheMs: 24 * 60 * 60 * 1000,
+    vehicleTypeCacheKey: 'lss-fahrzeugbrowser.vehicleTypes.de_DE.v3',
+    vehicleTypeCacheMs: 6 * 60 * 60 * 1000,
     apiV2PageSize: 500,
     apiV2DelayMs: 150,
     refreshAfterBackalarmMs: 1200
+  };
+
+  const MANUAL_TYPE_OVERRIDES = {
+    // Neue Autobahnpolizei, bis LSS-Manager den Typ selbst ausliefert.
+    184: 'FuStW (AP)'
   };
 
   const FMS_LABELS = {
@@ -212,12 +217,13 @@
         const id = item.id ?? item.type ?? item.vehicle_type ?? item.vehicle_type_id;
         addVehicleTypeToMap(map, id, item);
       }
+      applyManualTypeOverrides(map);
       return map;
     }
 
     if (typeof payload === 'object') {
       for (const [key, value] of Object.entries(payload)) {
-        if (/^\d+$/.test(key)) addVehicleTypeToMap(map, key, value);
+        if (/^[0-9]+$/.test(key)) addVehicleTypeToMap(map, key, value);
 
         if (value && typeof value === 'object') {
           const possibleId = value.id ?? value.type ?? value.vehicle_type ?? value.vehicle_type_id;
@@ -228,7 +234,53 @@
       }
     }
 
+    applyManualTypeOverrides(map);
     return map;
+  }
+
+  function applyManualTypeOverrides(map) {
+    for (const [id, name] of Object.entries(MANUAL_TYPE_OVERRIDES)) {
+      const numericId = asNumber(id);
+      if (numericId !== null && name) map.set(numericId, String(name));
+    }
+  }
+
+  function unknownVehicleTypeIds(vehicles = STATE.vehicles, vehicleTypes = STATE.vehicleTypes) {
+    const ids = new Set();
+    for (const vehicle of vehicles) {
+      const type = apiType(vehicle);
+      if (type !== null && !vehicleTypes.has(type)) ids.add(type);
+    }
+    return [...ids].sort((a, b) => a - b);
+  }
+
+  function clearVehicleTypeCache() {
+    localStorage.removeItem(CONFIG.vehicleTypeCacheKey);
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith('lss-fahrzeugbrowser.vehicleTypes.')) localStorage.removeItem(key);
+    }
+  }
+
+  function debugUnknownTypes() {
+    const unknown = unknownVehicleTypeIds();
+    if (!unknown.length) {
+      console.info('[Fahrzeugbrowser] Keine unbekannten Fahrzeugtypen gefunden.');
+      alert('Keine unbekannten Fahrzeugtypen gefunden.');
+      return;
+    }
+
+    console.table(unknown.map(id => ({
+      id,
+      exampleVehicles: STATE.vehicles
+        .filter(vehicle => apiType(vehicle) === id)
+        .slice(0, 5)
+        .map(vehicleCaption)
+        .join(', ')
+    })));
+
+    alert('Unbekannte Fahrzeugtyp-IDs: ' + unknown.join(', ') + '
+
+Die Beispiele stehen in der Browser-Konsole.');
   }
 
   function loadCachedVehicleTypes() {
@@ -243,8 +295,10 @@
     }
   }
 
-  async function fetchVehicleTypes() {
-    const cached = loadCachedVehicleTypes();
+  async function fetchVehicleTypes(forceReload = false) {
+    if (forceReload) clearVehicleTypeCache();
+
+    const cached = forceReload ? null : loadCachedVehicleTypes();
     if (cached) {
       STATE.typeSource = 'LSS-Manager Cache';
       return cached;
@@ -477,7 +531,7 @@
     return result;
   }
 
-  async function refresh() {
+  async function refresh(forceTypeReload = false) {
     STATE.loading = true;
     STATE.error = null;
     STATE.warning = null;
@@ -486,7 +540,7 @@
     try {
       let vehicleTypes;
       try {
-        vehicleTypes = await fetchVehicleTypes();
+        vehicleTypes = await fetchVehicleTypes(forceTypeReload);
       } catch (typeError) {
         console.warn('[Fahrzeugbrowser] Fahrzeugtypen konnten nicht geladen werden:', typeError);
         vehicleTypes = loadCachedVehicleTypes() || new Map();
@@ -500,6 +554,12 @@
       STATE.vehicles = vehicles;
       STATE.buildings = buildings;
       STATE.missions = scanVisibleMissions();
+      const unknownTypes = unknownVehicleTypeIds(vehicles, vehicleTypes);
+      if (unknownTypes.length) {
+        const note = `Unbekannte Fahrzeugtyp-ID(s): ${unknownTypes.join(', ')}. Falls das neue Autobahnpolizei-Fahrzeug noch nicht im LSS-Manager steht, bitte ID in MANUAL_TYPE_OVERRIDES eintragen.`;
+        STATE.warning = STATE.warning ? `${STATE.warning} ${note}` : note;
+      }
+
       STATE.lastUpdate = new Date();
     } catch (err) {
       STATE.error = err?.message || String(err);
@@ -599,6 +659,8 @@
         </div>
         <div class="fb-actions">
           <button class="fb-btn" data-action="refresh">Aktualisieren</button>
+          <button class="fb-btn" data-action="type-reload">Typnamen neu laden</button>
+          <button class="fb-btn" data-action="debug-unknown">Unbekannte IDs</button>
           <button class="fb-btn" data-action="close">Schließen</button>
         </div>
       </div>
@@ -656,6 +718,8 @@
       if (!(target instanceof HTMLElement)) return;
 
       if (target.dataset.action === 'refresh') refresh();
+      if (target.dataset.action === 'type-reload') refresh(true);
+      if (target.dataset.action === 'debug-unknown') debugUnknownTypes();
       if (target.dataset.action === 'close') { STATE.open = false; render(); }
       if (target.dataset.action === 'clear') { STATE.filterType = 'ALL'; STATE.filterStatus = 'ALL'; STATE.search = ''; render(); }
       if (target.dataset.open) openUrl(target.dataset.open);
