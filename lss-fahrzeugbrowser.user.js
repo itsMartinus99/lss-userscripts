@@ -1,19 +1,25 @@
 // ==UserScript==
-// @name         LSS Fahrzeugbrowser & Fahrzeugmanager
-// @namespace    itsmartinus-lss-tools
-// @version      1.3
-// @description  Kompakter Fahrzeugbrowser mit Filter nach Fahrzeugart, Standort, Status und Rückalarmieren-Funktion.
-// @author       ChatGPT
+// @name         LSS Fahrzeugbrowser stabil
+// @namespace    itsMartinus99-lss-tools
+// @version      2.0.0
+// @description  Fahrzeugbrowser für Leitstellenspiel: nutzt /api/vehicles als Hauptquelle, LSS-Manager für Typnamen und API v2 nur als Notfall-Fallback.
+// @author       Martin / ChatGPT
 // @match        https://www.leitstellenspiel.de/*
 // @match        https://leitstellenspiel.de/*
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @connect      api.lss-manager.de
 // ==/UserScript==
 
 (() => {
   'use strict';
 
-  const VEHICLE_TYPE_NAMES = {
-    0:'LF 20',1:'LF 10',2:'DLK',3:'ELW 1',4:'RW',5:'GW-A',6:'LF 8/6',7:'LF 20/16',8:'LF 10/6',9:'LF 16-TS',10:'GW-Öl',11:'GW-L2 Wasser',12:'GW-Mess',13:'SW 1000',14:'SW 2000',15:'SW 2000-Tr',16:'SW-KatS',17:'TLF 2000',18:'TLF 3000',19:'TLF 8/8',20:'TLF 8/18',21:'TLF 16/24-Tr',22:'TLF 16/25',23:'TLF 16/45',24:'TLF 20/40',25:'TLF 20/40-SL',26:'TLF 16',27:'GW-G',28:'RTW',29:'NEF',30:'HLF 20',31:'RTH',32:'FuStW',33:'GW-Höhenrettung',34:'ELW 2',35:'leBefKw',36:'MTW',37:'TSF-W',38:'KTW',39:'GKW',40:'MTW-TZ',41:'MzKW',42:'LKW K 9',43:'BRmG R',44:'Anh DLE',45:'MLW 5',46:'WLF',47:'AB-Rüst',48:'AB-Atemschutz',49:'AB-Öl',50:'GruKw',51:'FüKw',52:'GefKw',53:'Dekon-P',54:'AB-Dekon-P',55:'KdoW-LNA',56:'KdoW-OrgL',57:'FwK',58:'KTW Typ B',59:'ELW 1 (SEG)',60:'GW-San',61:'Polizeihubschrauber',62:'AB-Schlauch',63:'GW-Taucher',64:'GW-Wasserrettung',65:'LKW 7 Lkr 19 tm',66:'Anh MzB',67:'Anh SchlB',68:'Anh MzAB',69:'Tauchkraftwagen',70:'MZB',71:'AB-MZB',72:'WaWe 10',73:'GRTW',74:'NAW',75:'FLF',76:'Rettungstreppe',77:'AB-Gefahrgut',78:'AB-Einsatzleitung',79:'SEK - ZF',80:'SEK - MTF',81:'MEK - ZF',82:'MEK - MTF',83:'GW-Werkfeuerwehr',84:'ULF mit Löscharm',85:'TM 50',86:'Turbolöscher',87:'TLF 4000',88:'KLF',89:'MLF',90:'HLF 10',91:'Rettungshundefahrzeug',92:'Anh Hund',93:'MTW-O',94:'DHuFüKW',95:'Polizeimotorrad',96:'LKW 7 Lbw',97:'MLW 4',98:'Anh SwPu',99:'Anh 7',100:'FuStW (DGL)',101:'GW-L1',102:'GW-L2',103:'MTF-L',104:'LF-L',105:'AB-L',106:'AB-Mulde',107:'AB-Sand',108:'AB-Sonderlöschmittel',109:'AB-Wasser/Schaum',110:'AB-Verpflegung',111:'GW-Verpflegung',112:'GW-Küche',113:'MTW-Verpflegung',114:'FKH',115:'AB-Küche',116:'AB-Verpflegung',117:'Polizeizelle',118:'GW-Lüfter',119:'AB-Lüfter',120:'GW-Großlüfter',121:'ITW',122:'Zivilstreifenwagen',123:'Diensthundestaffel',124:'Betreuungskombi',125:'Bt-LKW',126:'Bt-Kombi',127:'MTW-Bt',128:'MTW-OV',129:'MzGW SB',130:'Anh 7 EGA',131:'Anh Drucklufterzeugung',132:'Anh Lichtmast',133:'AB-Strom',134:'AB-Wasserförderung',135:'AB-Medizin',136:'AB-Lösch',137:'AB-Hochwasser',138:'GW-Hochwasser',139:'MzGW',140:'FGr Räumen',141:'FGr Ortung',142:'Bergungsräumgerät',143:'Radlader',144:'Anh Wechselbrücke',145:'MZB Wasserrettung'
+  const CONFIG = {
+    vehicleTypeApi: 'https://api.lss-manager.de/de_DE/vehicles',
+    vehicleTypeCacheKey: 'lss-fahrzeugbrowser.vehicleTypes.de_DE.v2',
+    vehicleTypeCacheMs: 24 * 60 * 60 * 1000,
+    apiV2PageSize: 500,
+    apiV2DelayMs: 150,
+    refreshAfterBackalarmMs: 1200
   };
 
   const FMS_LABELS = {
@@ -25,327 +31,715 @@
     6: 'Status 6 – Nicht einsatzbereit',
     7: 'Status 7 – Patient aufgenommen',
     8: 'Status 8 – Am Krankenhaus',
-    9: 'Status 9 – Rückfahrt / Sonderstatus',
+    9: 'Status 9 – Sonderstatus'
   };
 
   const STATE = {
     open: false,
+    loading: false,
     vehicles: [],
     buildings: new Map(),
+    vehicleTypes: new Map(),
     missions: new Map(),
     filterType: 'ALL',
     filterStatus: 'ALL',
     search: '',
-    lastUpdate: null,
+    apiSource: null,
+    typeSource: null,
+    warning: null,
     error: null,
-    loading: false,
+    lastUpdate: null
   };
 
-  const css = `
-    #lss-vm-root{position:fixed;top:58px;left:50%;transform:translateX(-50%);width:min(980px,calc(100vw - 28px));max-height:calc(100vh - 84px);z-index:999998;background:rgba(9,16,24,.98);color:#e5e7eb;border:1px solid rgba(148,163,184,.25);border-radius:12px;box-shadow:0 18px 64px rgba(0,0,0,.62);font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:none;overflow:hidden;backdrop-filter:blur(8px)}
-    #lss-vm-root.vm-open{display:block}#lss-vm-root *{box-sizing:border-box}.vm-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 13px;border-bottom:1px solid rgba(148,163,184,.16)}.vm-title{font-size:18px;font-weight:900}.vm-sub{font-size:11px;color:#94a3b8;margin-top:2px}.vm-actions{display:flex;gap:7px;align-items:center}.vm-btn{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.88);color:#e5e7eb;border-radius:9px;padding:6px 9px;font-size:12px;cursor:pointer}.vm-btn:hover{background:rgba(30,41,59,.98)}.vm-btn.warn{border-color:rgba(239,68,68,.45);color:#fecaca}.vm-body{padding:11px 13px;overflow:auto;max-height:calc(100vh - 145px)}.vm-filters{display:grid;grid-template-columns:1.05fr .9fr 1.2fr auto;gap:8px;margin-bottom:10px}.vm-input,.vm-select{width:100%;border:1px solid rgba(148,163,184,.25);background:rgba(15,23,42,.9);color:#e5e7eb;border-radius:9px;padding:8px 9px;font-size:13px}.vm-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:10px}.vm-kpi{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.75);border-radius:10px;padding:8px 10px}.vm-kpi .label{font-size:11px;color:#a3aab7}.vm-kpi .value{font-size:20px;font-weight:900;margin-top:1px}.vm-table{width:100%;border-collapse:separate;border-spacing:0;border:1px solid rgba(148,163,184,.18);border-radius:10px;overflow:hidden}.vm-table th,.vm-table td{padding:7px 9px;border-bottom:1px solid rgba(148,163,184,.12);border-right:1px solid rgba(148,163,184,.08);vertical-align:middle}.vm-table th:last-child,.vm-table td:last-child{border-right:0}.vm-table tr:last-child td{border-bottom:0}.vm-table th{background:rgba(30,41,59,.72);font-size:12px;text-align:left;color:#cbd5e1}.vm-table td{font-size:13px}.vm-table tr{background:rgba(255,255,255,.015)}.vm-table tr:hover{background:rgba(255,255,255,.055)}.vm-status{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;border-radius:999px;font-size:12px;font-weight:800}.s1,.s2{background:rgba(34,197,94,.16);color:#86efac}.s3{background:rgba(234,179,8,.16);color:#fde68a}.s4{background:rgba(239,68,68,.16);color:#fca5a5}.s5{background:rgba(59,130,246,.16);color:#bfdbfe}.s6{background:rgba(148,163,184,.18);color:#cbd5e1}.s7,.s8,.s9{background:rgba(168,85,247,.16);color:#ddd6fe}.vm-link{color:#e5e7eb;cursor:pointer;text-decoration:none}.vm-link:hover{text-decoration:underline}.vm-muted{color:#94a3b8}.vm-small{font-size:11px;color:#94a3b8}.vm-empty{padding:24px;text-align:center;color:#94a3b8}.vm-profile-item{cursor:pointer!important}.vm-profile-item a{cursor:pointer!important}.vm-actions-cell{display:flex;gap:6px;flex-wrap:wrap}.vm-now{font-weight:750}.vm-now-sub{font-size:11px;color:#94a3b8;margin-top:2px}
-    @media(max-width:900px){#lss-vm-root{width:calc(100vw - 16px)}.vm-filters{grid-template-columns:1fr}.vm-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.vm-table{font-size:12px}.vm-table th,.vm-table td{padding:7px}.hide-mobile{display:none}}
+  const CSS = `
+    #lss-fb-root {
+      position: fixed;
+      top: 58px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 999998;
+      width: min(1120px, calc(100vw - 28px));
+      max-height: calc(100vh - 84px);
+      display: none;
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, .25);
+      border-radius: 13px;
+      background: rgba(8, 13, 22, .98);
+      color: #e5e7eb;
+      box-shadow: 0 18px 64px rgba(0, 0, 0, .62);
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #lss-fb-root.fb-open { display: block; }
+    #lss-fb-root * { box-sizing: border-box; }
+    .fb-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid rgba(148, 163, 184, .16); }
+    .fb-title { font-size: 18px; font-weight: 900; }
+    .fb-sub { margin-top: 2px; font-size: 11px; color: #94a3b8; }
+    .fb-actions { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+    .fb-btn { border: 1px solid rgba(148, 163, 184, .28); background: rgba(15, 23, 42, .88); color: #e5e7eb; border-radius: 9px; padding: 6px 9px; font-size: 12px; cursor: pointer; }
+    .fb-btn:hover { background: rgba(30, 41, 59, .98); }
+    .fb-btn-danger { border-color: rgba(239, 68, 68, .45); color: #fecaca; }
+    .fb-body { padding: 11px 13px; overflow: auto; max-height: calc(100vh - 145px); }
+    .fb-msg { margin-bottom: 10px; border: 1px solid rgba(148, 163, 184, .22); border-radius: 10px; padding: 8px 10px; background: rgba(15, 23, 42, .8); font-size: 12px; }
+    .fb-msg.warn { border-color: rgba(234, 179, 8, .45); color: #fde68a; }
+    .fb-msg.error { border-color: rgba(239, 68, 68, .45); color: #fecaca; }
+    .fb-filters { display: grid; grid-template-columns: 1.1fr .9fr 1.2fr auto; gap: 8px; margin-bottom: 10px; }
+    .fb-input, .fb-select { width: 100%; border: 1px solid rgba(148, 163, 184, .25); background: rgba(15, 23, 42, .9); color: #e5e7eb; border-radius: 9px; padding: 8px 9px; font-size: 13px; }
+    .fb-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+    .fb-kpi { border: 1px solid rgba(148, 163, 184, .18); background: rgba(15, 23, 42, .75); border-radius: 10px; padding: 8px 10px; }
+    .fb-kpi .label { font-size: 11px; color: #a3aab7; }
+    .fb-kpi .value { margin-top: 1px; font-size: 20px; font-weight: 900; }
+    .fb-table { width: 100%; border-collapse: separate; border-spacing: 0; border: 1px solid rgba(148, 163, 184, .18); border-radius: 10px; overflow: hidden; }
+    .fb-table th, .fb-table td { padding: 7px 9px; border-bottom: 1px solid rgba(148, 163, 184, .12); border-right: 1px solid rgba(148, 163, 184, .08); vertical-align: middle; }
+    .fb-table th:last-child, .fb-table td:last-child { border-right: 0; }
+    .fb-table tr:last-child td { border-bottom: 0; }
+    .fb-table th { position: sticky; top: 0; background: rgba(30, 41, 59, .92); font-size: 12px; text-align: left; color: #cbd5e1; }
+    .fb-table td { font-size: 13px; }
+    .fb-table tr { background: rgba(255, 255, 255, .015); }
+    .fb-table tr:hover { background: rgba(255, 255, 255, .055); }
+    .fb-status { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 999px; font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .s1, .s2 { background: rgba(34, 197, 94, .16); color: #86efac; }
+    .s3 { background: rgba(234, 179, 8, .16); color: #fde68a; }
+    .s4 { background: rgba(239, 68, 68, .16); color: #fca5a5; }
+    .s5 { background: rgba(59, 130, 246, .16); color: #bfdbfe; }
+    .s6 { background: rgba(148, 163, 184, .18); color: #cbd5e1; }
+    .s7, .s8, .s9 { background: rgba(168, 85, 247, .16); color: #ddd6fe; }
+    .fb-link { color: #e5e7eb; cursor: pointer; text-decoration: none; }
+    .fb-link:hover { text-decoration: underline; }
+    .fb-muted { color: #94a3b8; }
+    .fb-empty { padding: 24px; text-align: center; color: #94a3b8; }
+    .fb-actions-cell { display: flex; gap: 6px; flex-wrap: wrap; }
+    .fb-now { font-weight: 750; }
+    .fb-now-sub { margin-top: 2px; font-size: 11px; color: #94a3b8; }
+    @media (max-width: 900px) {
+      #lss-fb-root { width: calc(100vw - 16px); }
+      .fb-filters { grid-template-columns: 1fr; }
+      .fb-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .fb-hide-mobile { display: none; }
+      .fb-table th, .fb-table td { padding: 7px; }
+    }
   `;
 
-  function injectStyles(){
-    if(document.getElementById('lss-vm-style')) return;
-    const s=document.createElement('style');
-    s.id='lss-vm-style';
-    s.textContent=css;
-    document.head.appendChild(s);
+  function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
-  function csrfToken(){ return document.querySelector('meta[name="csrf-token"]')?.content || ''; }
-  function apiType(v){ const n=Number(v.vehicle_type ?? v.vehicle_type_id ?? v.type); return Number.isFinite(n) ? n : null; }
-  function typeName(v){ const n=apiType(v); return v.vehicle_type_caption || v.vehicle_type_name || v.type_caption || v.type_name || v.vehicle_type_label || (n!==null ? VEHICLE_TYPE_NAMES[n] : null) || `Fahrzeugtyp ${n ?? '?'}`; }
-  function vehicleCaption(v){ return v.caption || v.name || `Fahrzeug ${v.id}`; }
-  function vehicleId(v){ return v.id ?? v.vehicle_id; }
-  function buildingId(v){ return v.building_id ?? v.station_id ?? v.wache_id; }
-  function missionId(v){ return v.mission_id ?? v.current_mission_id ?? v.target_mission_id ?? v.missionId ?? v.target_id ?? v.destination_id; }
-  function fms(v){ const raw=v.fms_real ?? v.fms ?? v.status ?? v.state ?? v.fms_real_id; const n=Number(raw); return Number.isFinite(n) ? n : null; }
-  function fmsLabel(n){ return FMS_LABELS[n] || `Status ${n ?? '?'}`; }
-
-  function escapeHtml(s){ return String(s ?? '').replace(/[&<>'"]/g,ch=>({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' }[ch])); }
-
-  function normalizeVehicleList(payload){ if(Array.isArray(payload)) return payload; if(payload && Array.isArray(payload.result)) return payload.result; return []; }
-
-  async function fetchAllVehicles(){
-    const all=[];
-    let url='/api/v2/vehicles?limit=10000';
-    for(let safety=0;safety<30 && url;safety++){
-      const res=await fetch(url,{credentials:'same-origin'});
-      if(!res.ok) throw new Error(`Fahrzeug-API HTTP ${res.status}`);
-      const json=await res.json();
-      all.push(...normalizeVehicleList(json));
-      url=json?.paging?.next_page || null;
-      if(url && url.startsWith('http')){ const u=new URL(url); url=u.pathname+u.search; }
-      if(url) await new Promise(r=>setTimeout(r,100));
-    }
-    return all;
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[ch]));
   }
 
-  async function fetchBuildings(){
-    try{
-      const res=await fetch('/api/buildings',{credentials:'same-origin'});
-      if(!res.ok) return new Map();
-      const json=await res.json();
-      const map=new Map();
-      if(Array.isArray(json)) for(const b of json) map.set(Number(b.id), b);
+  function asNumber(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function relativeUrl(url) {
+    if (!url) return null;
+    const value = String(url);
+    if (!value.startsWith('http')) return value;
+    const parsed = new URL(value);
+    return parsed.pathname + parsed.search;
+  }
+
+  function normalizeVehicleList(payload) {
+    if (Array.isArray(payload)) return payload;
+    if (payload && Array.isArray(payload.result)) return payload.result;
+    if (payload && Array.isArray(payload.vehicles)) return payload.vehicles;
+    return [];
+  }
+
+  async function fetchGameJson(url) {
+    const response = await fetch(url, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error(`${url} HTTP ${response.status}`);
+    return response.json();
+  }
+
+  function externalJson(url) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest === 'function') {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url,
+          timeout: 10000,
+          onload: response => {
+            if (response.status < 200 || response.status >= 300) {
+              reject(new Error(`${url} HTTP ${response.status}`));
+              return;
+            }
+            try { resolve(JSON.parse(response.responseText)); }
+            catch (err) { reject(err); }
+          },
+          onerror: () => reject(new Error(`${url} konnte nicht geladen werden`)),
+          ontimeout: () => reject(new Error(`${url} Timeout`))
+        });
+        return;
+      }
+
+      fetch(url)
+        .then(response => {
+          if (!response.ok) throw new Error(`${url} HTTP ${response.status}`);
+          return response.json();
+        })
+        .then(resolve)
+        .catch(reject);
+    });
+  }
+
+  function extractTypeName(value) {
+    if (!value) return null;
+    if (typeof value === 'string') return value;
+    if (typeof value !== 'object') return null;
+    return value.caption || value.name || value.title || value.typeName || value.text || value.label || null;
+  }
+
+  function addVehicleTypeToMap(map, id, value) {
+    const numericId = asNumber(id);
+    const name = extractTypeName(value);
+    if (numericId !== null && name) map.set(numericId, String(name));
+  }
+
+  function walkVehicleTypes(payload, map = new Map()) {
+    if (!payload) return map;
+
+    if (Array.isArray(payload)) {
+      for (const item of payload) {
+        if (!item || typeof item !== 'object') continue;
+        const id = item.id ?? item.type ?? item.vehicle_type ?? item.vehicle_type_id;
+        addVehicleTypeToMap(map, id, item);
+      }
       return map;
-    }catch(_){ return new Map(); }
-  }
+    }
 
-  function extractMissionNameFromText(text){
-    let t=String(text||'').replace(/\s+/g,' ').trim();
-    if(!t) return null;
-    t=t.replace(/^\s*Alarm\s+/i,'');
-    t=t.replace(/≈\s*[\d.]+.*$/,'');
-    t=t.replace(/Fehlende Fahrzeuge:.*$/i,'');
-    t=t.replace(/Fehlendes Personal:.*$/i,'');
-    t=t.replace(/Ein Fahrzeug hat einen Sprechwunsch.*$/i,'');
-    t=t.replace(/\d+\s+Patienten.*$/i,'');
-    t=t.replace(/\d+x\s+Wir benötigen:.*$/i,'');
-    t=t.trim();
-    const comma=t.indexOf(',');
-    if(comma>3) t=t.slice(0,comma).trim();
-    return t || null;
-  }
+    if (typeof payload === 'object') {
+      for (const [key, value] of Object.entries(payload)) {
+        if (/^\d+$/.test(key)) addVehicleTypeToMap(map, key, value);
 
-  function scanVisibleMissions(){
-    const map=new Map();
-    const selectors=['[id^="mission_"]','.missionSideBarEntry','.mission_side_bar_entry','.mission_list_entry','.mission_panel'];
-    for(const sel of selectors){
-      for(const el of document.querySelectorAll(sel)){
-        const idMatch=(el.id||'').match(/mission_(\d+)/) || (el.getAttribute('data-mission-id')||'').match(/(\d+)/);
-        let mid=idMatch ? idMatch[1] : null;
-        if(!mid){
-          const a=el.querySelector?.('a[href*="/missions/"]') || (el.matches?.('a[href*="/missions/"]') ? el : null);
-          const m=a?.getAttribute('href')?.match(/\/missions\/(\d+)/);
-          if(m) mid=m[1];
+        if (value && typeof value === 'object') {
+          const possibleId = value.id ?? value.type ?? value.vehicle_type ?? value.vehicle_type_id;
+          if (possibleId !== undefined) addVehicleTypeToMap(map, possibleId, value);
+
+          if (!Array.isArray(value)) walkVehicleTypes(value, map);
         }
-        if(!mid) continue;
-        const name=extractMissionNameFromText(el.textContent);
-        if(name && !/^Einsatz\s*\d+$/i.test(name)) map.set(String(mid), name);
       }
     }
+
     return map;
   }
 
-  function getBuildingName(id){ if(!id) return '–'; const b=STATE.buildings.get(Number(id)); return b?.caption || b?.name || `Wache ${id}`; }
-
-  function missionName(v){
-    const explicit=v.mission_caption ?? v.mission_name ?? v.mission_title ?? v.target_caption ?? v.target_name ?? v.destination_caption ?? v.destination_name;
-    if(explicit) return String(explicit).replace(/\s+/g,' ').trim();
-    const mid=missionId(v);
-    if(mid && STATE.missions.has(String(mid))) return STATE.missions.get(String(mid));
-    return null;
+  function loadCachedVehicleTypes() {
+    try {
+      const cached = JSON.parse(localStorage.getItem(CONFIG.vehicleTypeCacheKey) || 'null');
+      if (!cached || !cached.updatedAt || !cached.payload) return null;
+      if (Date.now() - cached.updatedAt > CONFIG.vehicleTypeCacheMs) return null;
+      const map = walkVehicleTypes(cached.payload);
+      return map.size ? map : null;
+    } catch (_err) {
+      return null;
+    }
   }
 
-  function coord(v){
-    const lat=Number(v.latitude ?? v.lat ?? v.current_latitude ?? v.current_lat ?? v.target_latitude ?? v.target_lat);
-    const lng=Number(v.longitude ?? v.lng ?? v.lon ?? v.current_longitude ?? v.current_lng ?? v.target_longitude ?? v.target_lng);
-    if(Number.isFinite(lat)&&Number.isFinite(lng)) return {lat,lng};
-    return null;
+  async function fetchVehicleTypes() {
+    const cached = loadCachedVehicleTypes();
+    if (cached) {
+      STATE.typeSource = 'LSS-Manager Cache';
+      return cached;
+    }
+
+    const payload = await externalJson(CONFIG.vehicleTypeApi);
+    const map = walkVehicleTypes(payload);
+
+    if (!map.size) throw new Error('Fahrzeugtypen konnten aus LSS-Manager nicht gelesen werden');
+
+    localStorage.setItem(CONFIG.vehicleTypeCacheKey, JSON.stringify({
+      updatedAt: Date.now(),
+      payload
+    }));
+
+    STATE.typeSource = 'LSS-Manager';
+    return map;
   }
 
-  function currentLabel(v){
-    const name=missionName(v);
-    if(name) return { main:name, sub:'Einsatz', url: missionId(v) ? `/missions/${missionId(v)}` : null };
-    const c=coord(v);
-    if(c && [3,4,5,7,8,9].includes(fms(v))) return { main:'Position auf Karte', sub:`${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}`, url:`https://www.openstreetmap.org/?mlat=${c.lat}&mlon=${c.lng}#map=17/${c.lat}/${c.lng}` };
-    const bid=buildingId(v);
-    if(bid) return { main:getBuildingName(bid), sub:'Heimatwache', url:`/buildings/${bid}` };
-    return { main:'–', sub:'', url:null };
+  async function fetchVehiclesLegacy() {
+    const json = await fetchGameJson('/api/vehicles');
+    const list = normalizeVehicleList(json).map(vehicle => ({ ...vehicle, __apiSource: 'legacy' }));
+    if (!list.length) throw new Error('/api/vehicles lieferte keine Fahrzeuge');
+    return list;
   }
 
-  function typeOptions(){
-    const map=new Map();
-    for(const v of STATE.vehicles){ const t=typeName(v); map.set(t,(map.get(t)||0)+1); }
-    return [...map.entries()].sort((a,b)=>a[0].localeCompare(b[0],'de'));
+  async function fetchVehiclesV2() {
+    const all = [];
+    let url = `/api/v2/vehicles?limit=${CONFIG.apiV2PageSize}`;
+
+    for (let safety = 0; safety < 120 && url; safety += 1) {
+      const json = await fetchGameJson(url);
+      all.push(...normalizeVehicleList(json).map(vehicle => ({ ...vehicle, __apiSource: 'v2' })));
+      url = relativeUrl(json?.paging?.next_page || json?.pagination?.next_page || json?.next_page || null);
+      if (url) await wait(CONFIG.apiV2DelayMs);
+    }
+
+    if (!all.length) throw new Error('/api/v2/vehicles lieferte keine Fahrzeuge');
+    return all;
   }
 
-  function filteredVehicles(){
-    const q=STATE.search.trim().toLowerCase();
-    return STATE.vehicles.filter(v=>{
-      const t=typeName(v);
-      if(STATE.filterType!=='ALL' && t!==STATE.filterType) return false;
-      const s=fms(v);
-      if(STATE.filterStatus!=='ALL' && String(s)!==STATE.filterStatus) return false;
-      if(q){
-        const cur=currentLabel(v);
-        const hay=[vehicleCaption(v),t,getBuildingName(buildingId(v)),cur.main,cur.sub].join(' ').toLowerCase();
-        if(!hay.includes(q)) return false;
+  async function fetchAllVehicles() {
+    try {
+      const vehicles = await fetchVehiclesLegacy();
+      STATE.apiSource = '/api/vehicles';
+      return vehicles;
+    } catch (legacyError) {
+      console.warn('[Fahrzeugbrowser] /api/vehicles fehlgeschlagen, nutze API v2 als Notfall-Fallback:', legacyError);
+      STATE.warning = `/api/vehicles war nicht erreichbar (${legacyError.message}). API v2 wird nur als Notfall-Fallback genutzt.`;
+      const vehicles = await fetchVehiclesV2();
+      STATE.apiSource = '/api/v2/vehicles Fallback';
+      return vehicles;
+    }
+  }
+
+  async function fetchBuildings() {
+    try {
+      const json = await fetchGameJson('/api/buildings');
+      const map = new Map();
+      if (Array.isArray(json)) {
+        for (const building of json) map.set(Number(building.id), building);
       }
+      return map;
+    } catch (_err) {
+      return new Map();
+    }
+  }
+
+  function apiType(vehicle) {
+    return asNumber(vehicle.vehicle_type ?? vehicle.vehicle_type_id ?? vehicle.type ?? vehicle.type_id);
+  }
+
+  function typeName(vehicle) {
+    const explicit = vehicle.vehicle_type_caption || vehicle.vehicle_type_name || vehicle.type_caption || vehicle.type_name || vehicle.vehicle_type_label;
+    if (explicit) return String(explicit);
+
+    const type = apiType(vehicle);
+    if (type === null) return 'Fahrzeugtyp ?';
+
+    return STATE.vehicleTypes.get(type) || `Fahrzeugtyp ${type}`;
+  }
+
+  function vehicleId(vehicle) {
+    return vehicle.id ?? vehicle.vehicle_id;
+  }
+
+  function vehicleCaption(vehicle) {
+    return vehicle.caption || vehicle.name || `Fahrzeug ${vehicleId(vehicle) ?? '?'}`;
+  }
+
+  function buildingId(vehicle) {
+    return vehicle.building_id ?? vehicle.station_id ?? vehicle.wache_id ?? vehicle.home_building_id;
+  }
+
+  function missionId(vehicle) {
+    return vehicle.mission_id ?? vehicle.current_mission_id ?? vehicle.target_mission_id ?? vehicle.missionId ?? vehicle.target_id ?? vehicle.destination_id;
+  }
+
+  function fms(vehicle) {
+    return asNumber(vehicle.fms_real ?? vehicle.fms ?? vehicle.status ?? vehicle.state ?? vehicle.fms_real_id);
+  }
+
+  function fmsLabel(status) {
+    return FMS_LABELS[status] || `Status ${status ?? '?'}`;
+  }
+
+  function getBuildingName(id) {
+    if (!id) return '–';
+    const building = STATE.buildings.get(Number(id));
+    return building?.caption || building?.name || `Wache ${id}`;
+  }
+
+  function extractMissionNameFromText(text) {
+    let value = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!value) return null;
+    value = value.replace(/^\s*Alarm\s+/i, '');
+    value = value.replace(/≈\s*[\d.]+.*$/i, '');
+    value = value.replace(/Fehlende Fahrzeuge:.*$/i, '');
+    value = value.replace(/Fehlendes Personal:.*$/i, '');
+    value = value.replace(/Ein Fahrzeug hat einen Sprechwunsch.*$/i, '');
+    value = value.replace(/\d+\s+Patienten.*$/i, '');
+    value = value.replace(/\d+x\s+Wir benötigen:.*$/i, '');
+    value = value.trim();
+    const comma = value.indexOf(',');
+    if (comma > 3) value = value.slice(0, comma).trim();
+    return value || null;
+  }
+
+  function scanVisibleMissions() {
+    const map = new Map();
+    const selectors = ['[id^="mission_"]', '.missionSideBarEntry', '.mission_side_bar_entry', '.mission_list_entry', '.mission_panel'];
+
+    for (const selector of selectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        const idMatch = (element.id || '').match(/mission_(\d+)/) || (element.getAttribute('data-mission-id') || '').match(/(\d+)/);
+        let foundId = idMatch ? idMatch[1] : null;
+
+        if (!foundId) {
+          const link = element.querySelector?.('a[href*="/missions/"]') || (element.matches?.('a[href*="/missions/"]') ? element : null);
+          const match = link?.getAttribute('href')?.match(/\/missions\/(\d+)/);
+          if (match) foundId = match[1];
+        }
+
+        if (!foundId) continue;
+        const name = extractMissionNameFromText(element.textContent);
+        if (name && !/^Einsatz\s*\d+$/i.test(name)) map.set(String(foundId), name);
+      }
+    }
+
+    return map;
+  }
+
+  function coord(vehicle) {
+    const lat = asNumber(vehicle.latitude ?? vehicle.lat ?? vehicle.current_latitude ?? vehicle.current_lat ?? vehicle.target_latitude ?? vehicle.target_lat);
+    const lng = asNumber(vehicle.longitude ?? vehicle.lng ?? vehicle.lon ?? vehicle.current_longitude ?? vehicle.current_lng ?? vehicle.target_longitude ?? vehicle.target_lng);
+    return lat !== null && lng !== null ? { lat, lng } : null;
+  }
+
+  function missionName(vehicle) {
+    const explicit = vehicle.mission_caption || vehicle.mission_name || vehicle.mission_title || vehicle.target_caption || vehicle.target_name || vehicle.destination_caption || vehicle.destination_name;
+    if (explicit) return String(explicit).replace(/\s+/g, ' ').trim();
+    const id = missionId(vehicle);
+    if (id && STATE.missions.has(String(id))) return STATE.missions.get(String(id));
+    return null;
+  }
+
+  function currentLabel(vehicle) {
+    const name = missionName(vehicle);
+    if (name) return { main: name, sub: 'Einsatz', url: missionId(vehicle) ? `/missions/${missionId(vehicle)}` : null };
+
+    const position = coord(vehicle);
+    if (position && [3, 4, 5, 7, 8, 9].includes(fms(vehicle))) {
+      return {
+        main: 'Position auf Karte',
+        sub: `${position.lat.toFixed(5)}, ${position.lng.toFixed(5)}`,
+        url: `https://www.openstreetmap.org/?mlat=${position.lat}&mlon=${position.lng}#map=17/${position.lat}/${position.lng}`
+      };
+    }
+
+    const home = buildingId(vehicle);
+    if (home) return { main: getBuildingName(home), sub: 'Heimatwache', url: `/buildings/${home}` };
+
+    return { main: '–', sub: '', url: null };
+  }
+
+  function typeOptions() {
+    const map = new Map();
+    for (const vehicle of STATE.vehicles) {
+      const name = typeName(vehicle);
+      map.set(name, (map.get(name) || 0) + 1);
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0], 'de'));
+  }
+
+  function filteredVehicles() {
+    const query = STATE.search.trim().toLowerCase();
+
+    return STATE.vehicles.filter(vehicle => {
+      const type = typeName(vehicle);
+      if (STATE.filterType !== 'ALL' && type !== STATE.filterType) return false;
+
+      const status = fms(vehicle);
+      if (STATE.filterStatus !== 'ALL' && String(status) !== STATE.filterStatus) return false;
+
+      if (query) {
+        const current = currentLabel(vehicle);
+        const haystack = [vehicleCaption(vehicle), type, getBuildingName(buildingId(vehicle)), current.main, current.sub].join(' ').toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+
       return true;
-    }).sort((a,b)=>{
-      const sa=fms(a)??99, sb=fms(b)??99;
-      if(sa!==sb) return sa-sb;
-      return vehicleCaption(a).localeCompare(vehicleCaption(b),'de');
+    }).sort((a, b) => {
+      const fa = fms(a) ?? 99;
+      const fb = fms(b) ?? 99;
+      if (fa !== fb) return fa - fb;
+      return vehicleCaption(a).localeCompare(vehicleCaption(b), 'de');
     });
   }
 
-  function counts(list){
-    const c={total:list.length,ready:0,route:0,scene:0,sprech:0,notready:0};
-    for(const v of list){
-      const s=fms(v);
-      if(s===1||s===2)c.ready++;
-      else if(s===3)c.route++;
-      else if(s===4)c.scene++;
-      else if(s===5)c.sprech++;
-      else if(s===6)c.notready++;
+  function counts(list) {
+    const result = { total: list.length, ready: 0, route: 0, scene: 0, sprech: 0, notready: 0 };
+    for (const vehicle of list) {
+      const status = fms(vehicle);
+      if (status === 1 || status === 2) result.ready += 1;
+      else if (status === 3) result.route += 1;
+      else if (status === 4) result.scene += 1;
+      else if (status === 5) result.sprech += 1;
+      else if (status === 6) result.notready += 1;
     }
-    return c;
+    return result;
   }
 
-  async function refresh(){
-    STATE.loading=true; STATE.error=null; render();
-    try{
-      const [vehicles,buildings]=await Promise.all([fetchAllVehicles(),fetchBuildings()]);
-      STATE.vehicles=vehicles;
-      STATE.buildings=buildings;
-      STATE.missions=scanVisibleMissions();
-      STATE.lastUpdate=new Date();
-    }catch(err){ STATE.error=err?.message || String(err); }
-    finally{ STATE.loading=false; render(); }
+  async function refresh() {
+    STATE.loading = true;
+    STATE.error = null;
+    STATE.warning = null;
+    render();
+
+    try {
+      let vehicleTypes;
+      try {
+        vehicleTypes = await fetchVehicleTypes();
+      } catch (typeError) {
+        console.warn('[Fahrzeugbrowser] Fahrzeugtypen konnten nicht geladen werden:', typeError);
+        vehicleTypes = loadCachedVehicleTypes() || new Map();
+        STATE.typeSource = vehicleTypes.size ? 'alter Cache' : 'nicht geladen';
+        STATE.warning = `Fahrzeugtyp-Namen konnten nicht frisch geladen werden (${typeError.message}). Falls kein Cache vorhanden ist, werden Typ-IDs angezeigt.`;
+      }
+
+      const [vehicles, buildings] = await Promise.all([fetchAllVehicles(), fetchBuildings()]);
+
+      STATE.vehicleTypes = vehicleTypes;
+      STATE.vehicles = vehicles;
+      STATE.buildings = buildings;
+      STATE.missions = scanVisibleMissions();
+      STATE.lastUpdate = new Date();
+    } catch (err) {
+      STATE.error = err?.message || String(err);
+    } finally {
+      STATE.loading = false;
+      render();
+    }
   }
 
-  function findRealBackalarmButton(v){
-    const vid=String(vehicleId(v) ?? '');
-    const name=vehicleCaption(v).trim();
-    const candidates=[...document.querySelectorAll('a,button,input[type="button"],input[type="submit"]')].filter(el=>{
-      const text=((el.textContent||el.value||'')+' '+(el.title||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();
+  function openUrl(url) {
+    window.open(url, '_blank');
+  }
+
+  function findRealBackalarmButton(vehicle) {
+    const id = String(vehicleId(vehicle) ?? '');
+    const name = vehicleCaption(vehicle).trim();
+    const candidates = [...document.querySelectorAll('a, button, input[type="button"], input[type="submit"]')].filter(element => {
+      const text = `${element.textContent || element.value || ''} ${element.title || ''} ${element.getAttribute('aria-label') || ''}`.toLowerCase();
       return text.includes('rückalarm') || text.includes('ruckalarm') || text.includes('zurückalarm') || text.includes('zurueckalarm');
     });
 
-    for(const el of candidates){
-      const html=(el.outerHTML||'');
-      const row=el.closest('tr,.vehicle_row,.vehicle,li,div');
-      const rowText=(row?.textContent||'');
-      if(vid && (html.includes(vid) || rowText.includes(vid))) return el;
-      if(name && rowText.includes(name)) return el;
+    for (const element of candidates) {
+      const html = element.outerHTML || '';
+      const row = element.closest('tr, .vehicle_row, .vehicle, li, div');
+      const rowText = row?.textContent || '';
+      if (id && (html.includes(id) || rowText.includes(id))) return element;
+      if (name && rowText.includes(name)) return element;
     }
+
     return null;
   }
 
-  async function alarmBack(v){
-    const realButton=findRealBackalarmButton(v);
-    if(realButton){
+  async function alarmBack(vehicle) {
+    const realButton = findRealBackalarmButton(vehicle);
+    if (realButton) {
       realButton.click();
-      setTimeout(refresh,900);
+      setTimeout(refresh, CONFIG.refreshAfterBackalarmMs);
       return;
     }
 
-    const mid=missionId(v);
-    if(mid){
-      openUrl('/missions/'+mid);
-      alert('Ich habe den Einsatz geöffnet. Dort bitte einmal den originalen Rückalarmieren-Button nutzen. Ich kann erst direkt klicken, wenn der echte Button im DOM geladen ist.');
-      setTimeout(refresh,1200);
+    const id = missionId(vehicle);
+    if (id) {
+      openUrl(`/missions/${id}`);
+      alert('Ich habe den Einsatz geöffnet. Direktes Rückalarmieren ist nur möglich, wenn der originale Rückalarmieren-Button bereits auf der Seite geladen ist.');
       return;
     }
 
-    alert('Rückalarmieren geht hier noch nicht direkt, weil weder der echte Rückalarmieren-Button im DOM noch ein Einsatz erkannt wurde.');
+    alert('Rückalarmieren ist hier nicht möglich, weil kein Einsatz und kein echter Rückalarmieren-Button erkannt wurde.');
   }
 
-  function openUrl(url){ window.open(url,'_blank'); }
+  function rowHtml(vehicle) {
+    const id = vehicleId(vehicle);
+    const home = buildingId(vehicle);
+    const mission = missionId(vehicle);
+    const status = fms(vehicle);
+    const current = currentLabel(vehicle);
+    const canBackalarm = id && [3, 4, 5, 7, 8, 9].includes(status);
 
-  function rowHtml(v){
-    const vid=vehicleId(v);
-    const bid=buildingId(v);
-    const mid=missionId(v);
-    const s=fms(v);
-    const statusClass=`s${s ?? 6}`;
-    const canAlarmBack=vid && [3,4,5,7,8,9].includes(s);
-    const cur=currentLabel(v);
-    const curHtml=cur.url ? `<a class="vm-link vm-now" data-open="${escapeHtml(cur.url)}">${escapeHtml(cur.main)}</a><div class="vm-now-sub">${escapeHtml(cur.sub)}</div>` : `<span class="vm-muted">${escapeHtml(cur.main)}</span>`;
-    return `<tr>
-      <td><strong>${escapeHtml(vehicleCaption(v))}</strong><div class="vm-small">${escapeHtml(typeName(v))}</div></td>
-      <td><span class="vm-status ${statusClass}">${escapeHtml(fmsLabel(s))}</span></td>
-      <td>${bid ? `<a class="vm-link" data-open="/buildings/${bid}">${escapeHtml(getBuildingName(bid))}</a>` : '<span class="vm-muted">–</span>'}</td>
-      <td>${curHtml}</td>
-      <td><div class="vm-actions-cell">
-        ${vid ? `<button class="vm-btn" data-open="/vehicles/${vid}">Fahrzeug</button>` : ''}
-        ${bid ? `<button class="vm-btn" data-open="/buildings/${bid}">Wache</button>` : ''}
-        ${mid ? `<button class="vm-btn" data-open="/missions/${mid}">Einsatz</button>` : ''}
-        ${canAlarmBack ? `<button class="vm-btn warn" data-back="${vid}">Rückalarmieren</button>` : ''}
-      </div></td>
-    </tr>`;
+    const currentHtml = current.url
+      ? `<a class="fb-link fb-now" data-open="${escapeHtml(current.url)}">${escapeHtml(current.main)}</a><div class="fb-now-sub">${escapeHtml(current.sub)}</div>`
+      : `<span class="fb-now">${escapeHtml(current.main)}</span>`;
+
+    return `
+      <tr>
+        <td>${id ? `<a class="fb-link" data-open="/vehicles/${escapeHtml(id)}">${escapeHtml(vehicleCaption(vehicle))}</a>` : escapeHtml(vehicleCaption(vehicle))}</td>
+        <td>${escapeHtml(typeName(vehicle))}</td>
+        <td><span class="fb-status s${status ?? 6}">${escapeHtml(fmsLabel(status))}</span></td>
+        <td class="fb-hide-mobile">${home ? `<a class="fb-link" data-open="/buildings/${escapeHtml(home)}">${escapeHtml(getBuildingName(home))}</a>` : '–'}</td>
+        <td>${currentHtml}</td>
+        <td>
+          <div class="fb-actions-cell">
+            ${id ? `<button class="fb-btn" data-open="/vehicles/${escapeHtml(id)}">Fahrzeug</button>` : ''}
+            ${home ? `<button class="fb-btn" data-open="/buildings/${escapeHtml(home)}">Wache</button>` : ''}
+            ${mission ? `<button class="fb-btn" data-open="/missions/${escapeHtml(mission)}">Einsatz</button>` : ''}
+            ${canBackalarm ? `<button class="fb-btn fb-btn-danger" data-back="${escapeHtml(id)}">Rückalarmieren</button>` : ''}
+          </div>
+        </td>
+      </tr>`;
   }
 
-  function render(){
-    const root=document.getElementById('lss-vm-root');
-    if(!root) return;
-    root.classList.toggle('vm-open',STATE.open);
-    const list=filteredVehicles();
-    const c=counts(list);
-    const opts=typeOptions();
-    root.innerHTML=`
-      <div class="vm-head"><div><div class="vm-title">Fahrzeugbrowser</div><div class="vm-sub">${STATE.loading?'Lade Daten …':'Live-Daten aktiv'} · ${STATE.lastUpdate?STATE.lastUpdate.toLocaleTimeString():'–'}${STATE.error?' · Fehler: '+escapeHtml(STATE.error):''}</div></div><div class="vm-actions"><button class="vm-btn" data-action="refresh">Aktualisieren</button><button class="vm-btn" data-action="close">Schließen</button></div></div>
-      <div class="vm-body">
-        <div class="vm-filters">
-          <select class="vm-select" id="vm-type-select"><option value="ALL">Alle Fahrzeugarten (${STATE.vehicles.length})</option>${opts.map(([t,n])=>`<option value="${escapeHtml(t)}" ${STATE.filterType===t?'selected':''}>${escapeHtml(t)} (${n})</option>`).join('')}</select>
-          <select class="vm-select" id="vm-status-select"><option value="ALL">Alle Status</option>${[1,2,3,4,5,6,7,8,9].map(s=>`<option value="${s}" ${STATE.filterStatus===String(s)?'selected':''}>${escapeHtml(fmsLabel(s))}</option>`).join('')}</select>
-          <input class="vm-input" id="vm-search" placeholder="Suche nach Fahrzeug, Wache, Einsatz …" value="${escapeHtml(STATE.search)}">
-          <button class="vm-btn" data-action="clear">Filter leeren</button>
+  function render() {
+    const root = document.getElementById('lss-fb-root');
+    if (!root) return;
+
+    root.classList.toggle('fb-open', STATE.open);
+
+    const list = filteredVehicles();
+    const count = counts(list);
+    const options = typeOptions();
+    const sourceText = [STATE.apiSource ? `Fahrzeuge: ${STATE.apiSource}` : null, STATE.typeSource ? `Typen: ${STATE.typeSource}` : null].filter(Boolean).join(' · ');
+
+    root.innerHTML = `
+      <div class="fb-head">
+        <div>
+          <div class="fb-title">Fahrzeugbrowser</div>
+          <div class="fb-sub">${STATE.loading ? 'Lade Daten …' : 'Bereit'} · ${STATE.lastUpdate ? STATE.lastUpdate.toLocaleTimeString() : 'noch nicht geladen'}${sourceText ? ` · ${escapeHtml(sourceText)}` : ''}</div>
         </div>
-        <div class="vm-kpis"><div class="vm-kpi"><div class="label">Angezeigt</div><div class="value">${c.total}</div></div><div class="vm-kpi"><div class="label">Einsatzbereit 1/2</div><div class="value">${c.ready}</div></div><div class="vm-kpi"><div class="label">Anfahrt 3</div><div class="value">${c.route}</div></div><div class="vm-kpi"><div class="label">Einsatzort 4</div><div class="value">${c.scene}</div></div><div class="vm-kpi"><div class="label">Sprechwunsch / n. bereit</div><div class="value">${c.sprech}/${c.notready}</div></div></div>
-        <table class="vm-table"><thead><tr><th>Fahrzeug</th><th>Status</th><th>Heimatwache</th><th>Aktuell</th><th>Aktionen</th></tr></thead><tbody>${list.length?list.map(rowHtml).join(''):`<tr><td colspan="5"><div class="vm-empty">Keine Fahrzeuge für diese Auswahl gefunden.</div></td></tr>`}</tbody></table>
+        <div class="fb-actions">
+          <button class="fb-btn" data-action="refresh">Aktualisieren</button>
+          <button class="fb-btn" data-action="close">Schließen</button>
+        </div>
+      </div>
+      <div class="fb-body">
+        ${STATE.error ? `<div class="fb-msg error">Fehler: ${escapeHtml(STATE.error)}</div>` : ''}
+        ${STATE.warning ? `<div class="fb-msg warn">Hinweis: ${escapeHtml(STATE.warning)}</div>` : ''}
+
+        <div class="fb-filters">
+          <select id="fb-type-select" class="fb-select">
+            <option value="ALL">Alle Fahrzeugarten (${STATE.vehicles.length})</option>
+            ${options.map(([type, amount]) => `<option value="${escapeHtml(type)}" ${STATE.filterType === type ? 'selected' : ''}>${escapeHtml(type)} (${amount})</option>`).join('')}
+          </select>
+          <select id="fb-status-select" class="fb-select">
+            <option value="ALL">Alle Status</option>
+            ${[1,2,3,4,5,6,7,8,9].map(status => `<option value="${status}" ${STATE.filterStatus === String(status) ? 'selected' : ''}>${escapeHtml(fmsLabel(status))}</option>`).join('')}
+          </select>
+          <input id="fb-search" class="fb-input" placeholder="Suche: Fahrzeug, Wache, Einsatz …" value="${escapeHtml(STATE.search)}">
+          <button class="fb-btn" data-action="clear">Filter leeren</button>
+        </div>
+
+        <div class="fb-kpis">
+          <div class="fb-kpi"><div class="label">Angezeigt</div><div class="value">${count.total}</div></div>
+          <div class="fb-kpi"><div class="label">Einsatzbereit 1/2</div><div class="value">${count.ready}</div></div>
+          <div class="fb-kpi"><div class="label">Anfahrt 3</div><div class="value">${count.route}</div></div>
+          <div class="fb-kpi"><div class="label">Einsatzort 4</div><div class="value">${count.scene}</div></div>
+          <div class="fb-kpi"><div class="label">Sprechwunsch / n. bereit</div><div class="value">${count.sprech}/${count.notready}</div></div>
+        </div>
+
+        ${list.length ? `
+          <table class="fb-table">
+            <thead>
+              <tr>
+                <th>Fahrzeug</th>
+                <th>Typ</th>
+                <th>Status</th>
+                <th class="fb-hide-mobile">Heimatwache</th>
+                <th>Aktuell</th>
+                <th>Aktionen</th>
+              </tr>
+            </thead>
+            <tbody>${list.map(rowHtml).join('')}</tbody>
+          </table>` : '<div class="fb-empty">Keine Fahrzeuge für diese Auswahl gefunden.</div>'}
       </div>`;
   }
 
-  function createRoot(){
-    if(document.getElementById('lss-vm-root')) return;
-    const root=document.createElement('div');
-    root.id='lss-vm-root';
+  function createRoot() {
+    if (document.getElementById('lss-fb-root')) return;
+
+    const root = document.createElement('div');
+    root.id = 'lss-fb-root';
     document.body.appendChild(root);
-    root.addEventListener('click',ev=>{
-      const t=ev.target;
-      if(!(t instanceof HTMLElement)) return;
-      if(t.dataset.action==='refresh') refresh();
-      if(t.dataset.action==='close'){ STATE.open=false; render(); }
-      if(t.dataset.action==='clear'){ STATE.filterType='ALL'; STATE.filterStatus='ALL'; STATE.search=''; render(); }
-      if(t.dataset.open) openUrl(t.dataset.open);
-      if(t.dataset.back){ const v=STATE.vehicles.find(x=>String(vehicleId(x))===String(t.dataset.back)); if(v) alarmBack(v); }
+
+    root.addEventListener('click', event => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+
+      if (target.dataset.action === 'refresh') refresh();
+      if (target.dataset.action === 'close') { STATE.open = false; render(); }
+      if (target.dataset.action === 'clear') { STATE.filterType = 'ALL'; STATE.filterStatus = 'ALL'; STATE.search = ''; render(); }
+      if (target.dataset.open) openUrl(target.dataset.open);
+      if (target.dataset.back) {
+        const vehicle = STATE.vehicles.find(item => String(vehicleId(item)) === String(target.dataset.back));
+        if (vehicle) alarmBack(vehicle);
+      }
     });
-    root.addEventListener('change',ev=>{ const t=ev.target; if(!(t instanceof HTMLSelectElement)) return; if(t.id==='vm-type-select'){ STATE.filterType=t.value; render(); } if(t.id==='vm-status-select'){ STATE.filterStatus=t.value; render(); } });
-    root.addEventListener('input',ev=>{ const t=ev.target; if(!(t instanceof HTMLInputElement)) return; if(t.id==='vm-search'){ STATE.search=t.value; render(); } });
+
+    root.addEventListener('change', event => {
+      const target = event.target;
+      if (!(target instanceof HTMLSelectElement)) return;
+      if (target.id === 'fb-type-select') { STATE.filterType = target.value; render(); }
+      if (target.id === 'fb-status-select') { STATE.filterStatus = target.value; render(); }
+    });
+
+    root.addEventListener('input', event => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      if (target.id === 'fb-search') { STATE.search = target.value; render(); }
+    });
   }
 
-  function findProfileDropdownMenu(){
-    const toggles=[...document.querySelectorAll('a,button,li,div')].filter(el=>{
-      const html=(el.innerHTML||'').toLowerCase();
-      const cls=(el.className||'').toString().toLowerCase();
-      const title=(el.getAttribute('title')||'').toLowerCase();
-      const aria=(el.getAttribute('aria-label')||'').toLowerCase();
-      const text=(el.textContent||'').trim().toLowerCase();
-      return html.includes('glyphicon-user')||html.includes('fa-user')||html.includes('icon-user')||cls.includes('glyphicon-user')||cls.includes('fa-user')||title.includes('profil')||title.includes('profile')||aria.includes('profil')||aria.includes('profile')||text==='profil'||text==='profile';
+  function injectStyles() {
+    if (document.getElementById('lss-fb-style')) return;
+    const style = document.createElement('style');
+    style.id = 'lss-fb-style';
+    style.textContent = CSS;
+    document.head.appendChild(style);
+  }
+
+  function findProfileDropdownMenu() {
+    const candidates = [...document.querySelectorAll('a, button, li, div')].filter(element => {
+      const html = (element.innerHTML || '').toLowerCase();
+      const className = String(element.className || '').toLowerCase();
+      const title = (element.getAttribute('title') || '').toLowerCase();
+      const aria = (element.getAttribute('aria-label') || '').toLowerCase();
+      const text = (element.textContent || '').trim().toLowerCase();
+      return html.includes('glyphicon-user') || html.includes('fa-user') || html.includes('icon-user') || className.includes('glyphicon-user') || className.includes('fa-user') || title.includes('profil') || title.includes('profile') || aria.includes('profil') || aria.includes('profile') || text === 'profil' || text === 'profile';
     });
-    for(const toggle of toggles){
-      const li=toggle.closest('li.dropdown, li, .dropdown');
-      if(li){ const menu=li.querySelector('ul.dropdown-menu, .dropdown-menu'); if(menu) return menu; }
-      const controls=toggle.getAttribute('aria-controls') || toggle.getAttribute('data-target') || toggle.getAttribute('href');
-      if(controls && controls.startsWith('#')){ const controlled=document.querySelector(controls); const menu=controlled?.matches?.('.dropdown-menu') ? controlled : controlled?.querySelector?.('.dropdown-menu'); if(menu) return menu; }
-      let sib=toggle.nextElementSibling; while(sib){ if(sib.matches?.('ul.dropdown-menu, .dropdown-menu')) return sib; sib=sib.nextElementSibling; }
+
+    for (const candidate of candidates) {
+      const parent = candidate.closest('li.dropdown, li, .dropdown');
+      const menu = parent?.querySelector('ul.dropdown-menu, .dropdown-menu');
+      if (menu) return menu;
     }
-    const userIcon=document.querySelector('.glyphicon-user, .fa-user, [class*="user"]');
-    if(userIcon){ const li=userIcon.closest('li.dropdown, li, .dropdown'); const menu=li?.querySelector('ul.dropdown-menu, .dropdown-menu'); if(menu) return menu; }
-    return null;
+
+    const userIcon = document.querySelector('.glyphicon-user, .fa-user, [class*="user"]');
+    const parent = userIcon?.closest('li.dropdown, li, .dropdown');
+    return parent?.querySelector('ul.dropdown-menu, .dropdown-menu') || null;
   }
 
-  function insertProfileMenuItem(){
-    if(document.getElementById('lss-vm-profile-link')) return;
-    const menu=findProfileDropdownMenu();
-    if(!menu) return;
-    const li=document.createElement('li');
-    li.id='lss-vm-profile-link';
-    li.className='vm-profile-item';
-    li.innerHTML='<a href="#">🚗 Fahrzeugbrowser</a>';
-    li.addEventListener('click',ev=>{ ev.preventDefault(); ev.stopPropagation(); STATE.open=true; STATE.missions=scanVisibleMissions(); render(); refresh(); });
-    const anchors=[...menu.querySelectorAll('a')];
-    const profileSettings=anchors.find(a=>/profil|einstellung|account|benutzer|user|settings/i.test(a.textContent||''));
-    const anchorLi=profileSettings?.closest('li');
-    if(anchorLi && anchorLi.parentNode===menu) anchorLi.insertAdjacentElement('afterend',li); else menu.appendChild(li);
+  function insertMenuItem() {
+    if (document.getElementById('lss-fb-menu-item')) return;
+    const menu = findProfileDropdownMenu();
+    if (!menu) return;
+
+    const item = document.createElement('li');
+    item.id = 'lss-fb-menu-item';
+    item.innerHTML = '<a href="#">🚒 Fahrzeugbrowser</a>';
+
+    item.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      STATE.open = true;
+      STATE.missions = scanVisibleMissions();
+      render();
+      refresh();
+    });
+
+    menu.appendChild(item);
   }
 
-  function boot(){ injectStyles(); createRoot(); insertProfileMenuItem(); render(); setInterval(insertProfileMenuItem,3000); }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',boot); else boot();
+  function boot() {
+    injectStyles();
+    createRoot();
+    insertMenuItem();
+    render();
+    setInterval(insertMenuItem, 3000);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
 })();
